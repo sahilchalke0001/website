@@ -29,7 +29,7 @@ def get_vectorstore_from_url(url):
     vector_store = Chroma.from_documents(
         document_chunks,
         GoogleGenerativeAIEmbeddings(api_key=api_key, model="models/embedding-001"),
-        persist_directory="./chroma_db"
+        
     )
 
     
