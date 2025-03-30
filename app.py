@@ -14,88 +14,65 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 load_dotenv()
 
 def get_vectorstore_from_url(url):
-    try:
-        # Load content from the URL
-        loader = WebBaseLoader(url)
-        document = loader.load()
-        
-        # Split the document into chunks with proper configuration
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
-        )
-        document_chunks = text_splitter.split_documents(document)
-        
-        # Create vector store using Gemini embeddings
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError("GOOGLE_API_KEY not found in environment variables")
-
-        vector_store = Chroma.from_documents(
-            document_chunks,
-            GoogleGenerativeAIEmbeddings(api_key=api_key, model="models/embedding-001")
-        )
-        return vector_store
+    # Load content from the URL
+    loader = WebBaseLoader(url)
+    document = loader.load()
     
-    except Exception as e:
-        st.error(f"Error creating vector store: {str(e)}")
-        return None
+    # Split the document into chunks
+    text_splitter = RecursiveCharacterTextSplitter()
+    document_chunks = text_splitter.split_documents(document)
+    
+    # Create vector store using Gemini embeddings
+    api_key = os.getenv("GOOGLE_API_KEY")
+
+
+    vector_store = Chroma.from_documents(
+        document_chunks,
+        GoogleGenerativeAIEmbeddings(api_key=api_key, model="models/embedding-001"),
+        persist_directory="./chroma_db"
+    )
+
+    
+    return vector_store
 
 def get_context_retriever_chain(vector_store):
-    try:
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-001")  # Updated model name
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")  
 
-        retriever = vector_store.as_retriever()
+    retriever = vector_store.as_retriever()
 
-        prompt = ChatPromptTemplate.from_messages([
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("user", "{input}"),
-            ("user", "Given the above conversation, generate a search query to look up information relevant to the conversation.")
-        ])
+    prompt = ChatPromptTemplate.from_messages([
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+        ("user", "Given the above conversation, generate a search query to look up information relevant to the conversation.")
+    ])
 
-        retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
-        return retriever_chain
+    retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
     
-    except Exception as e:
-        st.error(f"Error creating retriever chain: {str(e)}")
-        return None
+    return retriever_chain
     
 def get_conversational_rag_chain(retriever_chain):
-    try:
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-001")  # Updated model name
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")  # Gemini model
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "Answer the user's questions based on the below context:\n\n{context}"),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("user", "{input}"),
-        ])
-        
-        stuff_documents_chain = create_stuff_documents_chain(llm, prompt)
-        return create_retrieval_chain(retriever_chain, stuff_documents_chain)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "Answer the user's questions based on the below context:\n\n{context}"),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+    ])
     
-    except Exception as e:
-        st.error(f"Error creating conversation chain: {str(e)}")
-        return None
+    stuff_documents_chain = create_stuff_documents_chain(llm, prompt)
+    
+    return create_retrieval_chain(retriever_chain, stuff_documents_chain)
 
 def get_response(user_input):
-    try:
-        retriever_chain = get_context_retriever_chain(st.session_state.vector_store)
-        if not retriever_chain:
-            return "Error initializing retriever chain"
-        
-        conversation_rag_chain = get_conversational_rag_chain(retriever_chain)
-        if not conversation_rag_chain:
-            return "Error initializing conversation chain"
-        
-        response = conversation_rag_chain.invoke({
-            "chat_history": st.session_state.chat_history,
-            "input": user_input
-        })
-        
-        return response['answer']
+    retriever_chain = get_context_retriever_chain(st.session_state.vector_store)
+    conversation_rag_chain = get_conversational_rag_chain(retriever_chain)
     
-    except Exception as e:
-        return f"Error generating response: {str(e)}"
+    response = conversation_rag_chain.invoke({
+        "chat_history": st.session_state.chat_history,
+        "input": user_input
+    })
+    
+    return response['answer']
 
 # App configuration
 st.set_page_config(page_title="Chat with websites", page_icon="🤖")
@@ -106,22 +83,21 @@ with st.sidebar:
     st.header("Settings")
     website_url = st.text_input("Website URL")
 
-if not website_url:
+if website_url is None or website_url == "":
     st.info("Please enter a website URL")
+
 else:
-    # Initialize or update vector store when URL changes
-    if "website_url" not in st.session_state or st.session_state.website_url != website_url:
-        st.session_state.website_url = website_url
-        st.session_state.vector_store = get_vectorstore_from_url(website_url)
-        st.session_state.chat_history = [AIMessage(content="Hello, I am a bot. How can I help you?")]
-    
-    # Initialize chat history if not exists
+    # Initialize session state
     if "chat_history" not in st.session_state:
-        st.session_state.chat_history = [AIMessage(content="Hello, I am a bot. How can I help you?")]
+        st.session_state.chat_history = [
+            AIMessage(content="Hello, I am a bot. How can I help you?"),
+        ]
+    if "vector_store" not in st.session_state:
+        st.session_state.vector_store = get_vectorstore_from_url(website_url)
 
     # User input
     user_query = st.chat_input("Type your message here...")
-    if user_query:
+    if user_query is not None and user_query != "":
         response = get_response(user_query)
         st.session_state.chat_history.append(HumanMessage(content=user_query))
         st.session_state.chat_history.append(AIMessage(content=response))
